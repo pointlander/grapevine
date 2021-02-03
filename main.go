@@ -5,11 +5,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -39,12 +41,13 @@ type Message struct {
 
 var (
 	// Port is the server port
-	Port       = flag.Int("port", 1337, "port")
-	u          *upnp.UPNP
-	nodes      = make(map[string]Peer)
-	nodesMutex sync.Mutex
-	address    string
-	messages   = make([]Message, 0, 8)
+	Port          = flag.Int("port", 1337, "port")
+	u             *upnp.UPNP
+	nodes         = make(map[string]Peer)
+	nodesMutex    sync.Mutex
+	address       string
+	messages      = make([]Message, 0, 8)
+	messagesMutex sync.Mutex
 )
 
 func cost(hash []byte) (cost uint64) {
@@ -93,7 +96,7 @@ func main() {
 
 	ip := upnp.GetLocalAddress()
 	if ip != nil {
-		address = fmt.Sprintf("%v:%d", ip, *Port)
+		address = fmt.Sprintf("%v:%d", ip, *Port+2)
 	}
 	u, err = upnp.NewUPNP()
 	if err != nil {
@@ -106,7 +109,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		address = fmt.Sprintf("%v:%d", ip, *Port)
+		address = fmt.Sprintf("%v:%d", ip, *Port+2)
 	}
 
 	config := dht.NewConfig()
@@ -146,7 +149,10 @@ func main() {
 		defer connection.Close()
 		for {
 			buffer := make([]byte, 1024+8*8)
-			_, _, err := connection.ReadFrom(buffer)
+			n, _, err := connection.ReadFrom(buffer)
+			if n < 1024 {
+				continue
+			}
 			if err != nil {
 				log.Println(err)
 				return
@@ -175,7 +181,7 @@ func main() {
 			for i := 0; i < len(proofs); i += 8 {
 				hash, err := scrypt.Key(text, proofs[i:i+8], 32768, 8, 1, 32)
 				if err != nil {
-					log.Println(err)
+					panic(err)
 				}
 				total += cost(hash)
 			}
@@ -183,15 +189,75 @@ func main() {
 			for i := range runes {
 				runes[i] = rune(binary.LittleEndian.Uint32(text[i*4 : i*4+4]))
 			}
+			messagesMutex.Lock()
 			messages = append(messages, Message{
 				Message: string(runes),
 				Cost:    total,
 				Time:    time.Now(),
 			})
+			messagesMutex.Unlock()
 		case command := <-commands:
 			parts := strings.Split(command, " ")
 			if parts[0] == "send" {
-
+				message := strings.Join(parts[1:], " ")
+				runes := make([]rune, 256)
+				for i := range runes {
+					runes[i] = ' '
+				}
+				for i, r := range []rune(message) {
+					runes[i] = r
+				}
+				buffer := make([]byte, 1024)
+				for i, r := range runes {
+					binary.LittleEndian.PutUint32(buffer[4*i:4*i+4], uint32(r))
+				}
+				nonce, n := make([]byte, 8), uint64(0)
+				binary.LittleEndian.PutUint64(nonce, n)
+				hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
+				if err != nil {
+					panic(err)
+				}
+				c := cost(hash)
+				for c < 8 {
+					n++
+					binary.LittleEndian.PutUint64(nonce, n)
+					hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
+					if err != nil {
+						panic(err)
+					}
+					c = cost(hash)
+				}
+				buffer = append(buffer, nonce...)
+				nodesMutex.Lock()
+				for addr := range nodes {
+					raddr, err := net.ResolveUDPAddr("udp", addr)
+					if err != nil {
+						log.Println(err)
+						break
+					}
+					connection, err := net.DialUDP("udp", nil, raddr)
+					if err != nil {
+						log.Println(err)
+						break
+					}
+					reader := bytes.NewReader(buffer)
+					_, err = io.Copy(connection, reader)
+					if err != nil {
+						delete(nodes, addr)
+					}
+					connection.Close()
+				}
+				nodesMutex.Unlock()
+			} else if parts[0] == "messages" {
+				messagesMutex.Lock()
+				for _, message := range messages {
+					fmt.Println(message)
+				}
+				messagesMutex.Unlock()
+			} else if parts[0] == "peers" {
+				nodesMutex.Lock()
+				fmt.Println(nodes)
+				nodesMutex.Unlock()
 			}
 		}
 	}
