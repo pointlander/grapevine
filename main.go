@@ -27,6 +27,9 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
+// DefaultCost is the default cost
+const DefaultCost = 1 << 5
+
 // Peer is a node peer
 type Peer struct {
 	Address string
@@ -189,6 +192,9 @@ func main() {
 				}
 				total += cost(hash)
 			}
+			if total < DefaultCost {
+				break
+			}
 			runes := make([]rune, 256)
 			for i := range runes {
 				runes[i] = rune(binary.LittleEndian.Uint32(text[i*4 : i*4+4]))
@@ -222,7 +228,7 @@ func main() {
 					panic(err)
 				}
 				c := cost(hash)
-				for c < 8 {
+				for c < DefaultCost {
 					n++
 					binary.LittleEndian.PutUint64(nonce, n)
 					hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
