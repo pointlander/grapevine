@@ -29,8 +29,12 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
-// DefaultCost is the default cost
-const DefaultCost = 1 << 5
+const (
+	// MaxPacketSize is the maximum packet size
+	MaxPacketSize = (1 << 16) - 1 - 8 - 20
+	// DefaultCost is the default cost
+	DefaultCost = 1 << 5
+)
 
 // Peer is a node peer
 type Peer struct {
@@ -210,11 +214,12 @@ func main() {
 		}
 		defer connection.Close()
 		for {
-			buffer := make([]byte, 1024+8*8)
+			buffer := make([]byte, MaxPacketSize)
 			n, _, err := connection.ReadFrom(buffer)
-			if n < 1024 {
+			if n < 1032 || ((n-1032)%8) != 0 {
 				continue
 			}
+			buffer = buffer[:n]
 			if err != nil {
 				log.Println(err)
 				return
@@ -286,10 +291,10 @@ func main() {
 			} else if parts[0] == "messages" {
 				messagesMutex.Lock()
 				sort.Slice(messages, func(i, j int) bool {
-					if messages[j].Cost == messages[i].Cost {
-						return messages[j].Time.Before(messages[i].Time)
+					if messages[i].Cost == messages[j].Cost {
+						return messages[i].Time.Before(messages[j].Time)
 					}
-					return messages[j].Cost < messages[i].Cost
+					return messages[i].Cost < messages[j].Cost
 				})
 				for _, message := range messages {
 					fmt.Printf("%d: \"%s\" %d\n", message.ID, strings.TrimSpace(message.Message), message.Cost)
