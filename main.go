@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"os/signal"
@@ -46,7 +47,7 @@ type Message struct {
 	ID      int
 	Buffer  []byte
 	Message string
-	Cost    uint64
+	Cost    *big.Int
 	Time    time.Time
 }
 
@@ -62,20 +63,21 @@ var (
 	messagesMutex sync.Mutex
 )
 
-func cost(hash []byte) (cost uint64) {
+func cost(hash []byte) (cost *big.Int) {
+	cost = big.NewInt(0)
 	for i, value := range hash {
 		if i == 0 {
 			if value&1 == 0 {
-				cost = 1
+				cost.SetUint64(1)
 			} else {
-				return 0
+				return cost
 			}
 			value >>= 1
 			for j := 1; j < 8; j++ {
 				if value&1 != 0 {
 					return cost
 				}
-				cost <<= 1
+				cost = cost.Lsh(cost, 1)
 				value >>= 1
 			}
 		} else {
@@ -83,7 +85,7 @@ func cost(hash []byte) (cost uint64) {
 				if value&1 != 0 {
 					return cost
 				}
-				cost <<= 1
+				cost = cost.Lsh(cost, 1)
 				value >>= 1
 			}
 		}
@@ -91,7 +93,7 @@ func cost(hash []byte) (cost uint64) {
 	return cost
 }
 
-func pow(buffer []byte, min uint64) []byte {
+func pow(buffer []byte, min *big.Int) []byte {
 	nonce, n := make([]byte, 8), uint64(0)
 	binary.LittleEndian.PutUint64(nonce, n)
 	hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
@@ -99,7 +101,7 @@ func pow(buffer []byte, min uint64) []byte {
 		panic(err)
 	}
 	c := cost(hash)
-	for c < min {
+	for c.Cmp(min) < 0 {
 		n++
 		binary.LittleEndian.PutUint64(nonce, n)
 		hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
@@ -245,15 +247,15 @@ func main() {
 		case packet := <-packets:
 			text := packet[:1024]
 			proofs := packet[1024:]
-			total := uint64(0)
+			total := big.NewInt(0)
 			for i := 0; i < len(proofs); i += 8 {
 				hash, err := scrypt.Key(text[:1024+i], proofs[i:i+8], 32768, 8, 1, 32)
 				if err != nil {
 					panic(err)
 				}
-				total += cost(hash)
+				total = total.Add(total, cost(hash))
 			}
-			if total < DefaultCost {
+			if total.Cmp(big.NewInt(DefaultCost)) < 0 {
 				break
 			}
 			runes := make([]rune, 256)
@@ -285,19 +287,19 @@ func main() {
 				for i, r := range runes {
 					binary.LittleEndian.PutUint32(buffer[4*i:4*i+4], uint32(r))
 				}
-				nonce := pow(buffer, DefaultCost)
+				nonce := pow(buffer, big.NewInt(DefaultCost))
 				buffer = append(buffer, nonce...)
 				send(buffer)
 			} else if parts[0] == "messages" {
 				messagesMutex.Lock()
 				sort.Slice(messages, func(i, j int) bool {
-					if messages[i].Cost == messages[j].Cost {
+					if messages[i].Cost.Cmp(messages[j].Cost) == 0 {
 						return messages[i].Time.Before(messages[j].Time)
 					}
-					return messages[i].Cost < messages[j].Cost
+					return messages[i].Cost.Cmp(messages[j].Cost) < 0
 				})
 				for _, message := range messages {
-					fmt.Printf("%d: \"%s\" %d\n", message.ID, strings.TrimSpace(message.Message), message.Cost)
+					fmt.Printf("%d: \"%s\" %v\n", message.ID, strings.TrimSpace(message.Message), message.Cost)
 				}
 				messagesMutex.Unlock()
 			} else if parts[0] == "peers" {
@@ -324,7 +326,9 @@ func main() {
 						}
 					}
 					messagesMutex.Unlock()
-					nonce := pow(buffer, 1<<cost)
+					min := big.NewInt(1)
+					min = min.Lsh(min, uint(cost))
+					nonce := pow(buffer, min)
 					buffer = append(buffer, nonce...)
 					send(buffer)
 				}
