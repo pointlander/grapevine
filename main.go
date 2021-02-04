@@ -53,7 +53,11 @@ var (
 func cost(hash []byte) (cost uint64) {
 	for i, value := range hash {
 		if i == 0 {
-			cost = uint64(value & 1)
+			if value&1 == 0 {
+				cost = 1
+			} else {
+				return 0
+			}
 			value >>= 1
 			for j := 1; j < 8; j++ {
 				if value&1 != 0 {
@@ -179,7 +183,7 @@ func main() {
 			proofs := packet[1024:]
 			total := uint64(0)
 			for i := 0; i < len(proofs); i += 8 {
-				hash, err := scrypt.Key(text, proofs[i:i+8], 32768, 8, 1, 32)
+				hash, err := scrypt.Key(text[:1024+i], proofs[i:i+8], 32768, 8, 1, 32)
 				if err != nil {
 					panic(err)
 				}
