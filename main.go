@@ -48,7 +48,7 @@ var (
 	u             *upnp.UPNP
 	nodes         = make(map[string]Peer)
 	nodesMutex    sync.Mutex
-	address       string
+	blacklist     = make(map[string]bool)
 	messages      = make([]Message, 0, 8)
 	messagesMutex sync.Mutex
 )
@@ -103,7 +103,8 @@ func main() {
 
 	ip := upnp.GetLocalAddress()
 	if ip != nil {
-		address = fmt.Sprintf("%v:%d", ip, *Port+2)
+		blacklist[fmt.Sprintf("%v:%d", ip, *Port)] = true
+		blacklist[fmt.Sprintf("%v:%d", ip, *Port+2)] = true
 	}
 	u, err = upnp.NewUPNP()
 	if err != nil {
@@ -116,7 +117,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		address = fmt.Sprintf("%v:%d", ip, *Port+2)
+		blacklist[fmt.Sprintf("%v:%d", ip, *Port)] = true
+		blacklist[fmt.Sprintf("%v:%d", ip, *Port+2)] = true
 	}
 
 	config := dht.NewConfig()
@@ -278,6 +280,9 @@ func drainresults(n *dht.DHT) {
 		for _, peers := range r {
 			for _, x := range peers {
 				peer := dht.DecodePeerAddress(x)
+				if blacklist[peer] {
+					continue
+				}
 				nodesMutex.Lock()
 				nodes[peer] = Peer{
 					Address: peer,
