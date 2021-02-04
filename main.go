@@ -16,6 +16,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,6 +39,8 @@ type Peer struct {
 
 // Message is a message
 type Message struct {
+	ID      int
+	Buffer  []byte
 	Message string
 	Cost    uint64
 	Time    time.Time
@@ -49,6 +53,7 @@ var (
 	nodes         = make(map[string]Peer)
 	nodesMutex    sync.Mutex
 	blacklist     = make(map[string]bool)
+	id            = 0
 	messages      = make([]Message, 0, 8)
 	messagesMutex sync.Mutex
 )
@@ -82,8 +87,55 @@ func cost(hash []byte) (cost uint64) {
 	return cost
 }
 
+func pow(buffer []byte, min uint64) []byte {
+	nonce, n := make([]byte, 8), uint64(0)
+	binary.LittleEndian.PutUint64(nonce, n)
+	hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
+	if err != nil {
+		panic(err)
+	}
+	c := cost(hash)
+	for c < min {
+		n++
+		binary.LittleEndian.PutUint64(nonce, n)
+		hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
+		if err != nil {
+			panic(err)
+		}
+		c = cost(hash)
+	}
+	return nonce
+}
+
+func send(buffer []byte) {
+	nodesMutex.Lock()
+	for addr := range nodes {
+		raddr, err := net.ResolveUDPAddr("udp", addr)
+		if err != nil {
+			log.Println(err)
+			break
+		}
+		connection, err := net.DialUDP("udp", nil, raddr)
+		if err != nil {
+			log.Println(err)
+			break
+		}
+		reader := bytes.NewReader(buffer)
+		_, err = io.Copy(connection, reader)
+		if err != nil {
+			delete(nodes, addr)
+		}
+		connection.Close()
+	}
+	nodesMutex.Unlock()
+}
+
 func completer(d prompt.Document) []prompt.Suggest {
 	s := []prompt.Suggest{
+		{Text: "send", Description: "send a message"},
+		{Text: "messages", Description: "list messages in the database"},
+		{Text: "peers", Description: "list peer nodes"},
+		{Text: "like", Description: "like a message in the database: like 123 5"},
 		{Text: "exit", Description: "Exit the application"},
 	}
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
@@ -149,7 +201,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	ticker, packets, commands := time.Tick(5*time.Second), make(chan []byte, 8), make(chan string, 8)
+	ticker, packets, commands, processed :=
+		time.Tick(5*time.Second), make(chan []byte, 8), make(chan string, 8), make(chan bool, 8)
 	go func() {
 		connection, err := net.ListenPacket("udp", fmt.Sprintf(":%d", *Port+2))
 		if err != nil {
@@ -177,6 +230,7 @@ func main() {
 				return
 			}
 			commands <- command
+			<-processed
 		}
 	}()
 	for {
@@ -203,10 +257,13 @@ func main() {
 			}
 			messagesMutex.Lock()
 			messages = append(messages, Message{
+				ID:      id,
+				Buffer:  packet,
 				Message: string(runes),
 				Cost:    total,
 				Time:    time.Now(),
 			})
+			id++
 			messagesMutex.Unlock()
 		case command := <-commands:
 			parts := strings.Split(command, " ")
@@ -223,54 +280,51 @@ func main() {
 				for i, r := range runes {
 					binary.LittleEndian.PutUint32(buffer[4*i:4*i+4], uint32(r))
 				}
-				nonce, n := make([]byte, 8), uint64(0)
-				binary.LittleEndian.PutUint64(nonce, n)
-				hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
-				if err != nil {
-					panic(err)
-				}
-				c := cost(hash)
-				for c < DefaultCost {
-					n++
-					binary.LittleEndian.PutUint64(nonce, n)
-					hash, err := scrypt.Key(buffer, nonce, 32768, 8, 1, 32)
-					if err != nil {
-						panic(err)
-					}
-					c = cost(hash)
-				}
+				nonce := pow(buffer, DefaultCost)
 				buffer = append(buffer, nonce...)
-				nodesMutex.Lock()
-				for addr := range nodes {
-					raddr, err := net.ResolveUDPAddr("udp", addr)
-					if err != nil {
-						log.Println(err)
-						break
-					}
-					connection, err := net.DialUDP("udp", nil, raddr)
-					if err != nil {
-						log.Println(err)
-						break
-					}
-					reader := bytes.NewReader(buffer)
-					_, err = io.Copy(connection, reader)
-					if err != nil {
-						delete(nodes, addr)
-					}
-					connection.Close()
-				}
-				nodesMutex.Unlock()
+				send(buffer)
 			} else if parts[0] == "messages" {
 				messagesMutex.Lock()
+				sort.Slice(messages, func(i, j int) bool {
+					if messages[j].Cost == messages[i].Cost {
+						return messages[j].Time.Before(messages[i].Time)
+					}
+					return messages[j].Cost < messages[i].Cost
+				})
 				for _, message := range messages {
-					fmt.Println(message)
+					fmt.Printf("%d: \"%s\" %d\n", message.ID, strings.TrimSpace(message.Message), message.Cost)
 				}
 				messagesMutex.Unlock()
 			} else if parts[0] == "peers" {
 				nodesMutex.Lock()
-				fmt.Println(nodes)
+				for node := range nodes {
+					fmt.Println(node)
+				}
 				nodesMutex.Unlock()
+			} else if parts[0] == "like" {
+				if len(parts) == 3 {
+					id, err := strconv.Atoi(parts[1])
+					if err != nil {
+						log.Println(err)
+					}
+					cost, err := strconv.Atoi(parts[2])
+					if err != nil {
+						log.Println(err)
+					}
+					var buffer []byte
+					messagesMutex.Lock()
+					for _, message := range messages {
+						if message.ID == id {
+							buffer = message.Buffer
+						}
+					}
+					messagesMutex.Unlock()
+					nonce := pow(buffer, 1<<cost)
+					buffer = append(buffer, nonce...)
+					send(buffer)
+				}
 			}
+			processed <- true
 		}
 	}
 }
