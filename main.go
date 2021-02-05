@@ -207,6 +207,7 @@ func main() {
 			u.DelPortMapping(*Port+2, "UDP")
 		}
 		d.RemoveInfoHash(string(ih))
+		d.Stop()
 		os.Exit(0)
 	}()
 
