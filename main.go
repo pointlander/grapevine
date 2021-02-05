@@ -52,6 +52,12 @@ type Message struct {
 	Time    time.Time
 }
 
+// Command is a command
+type Command struct {
+	Command   string
+	Processed chan bool
+}
+
 var (
 	// Port is the server port
 	Port          = flag.Int("port", 1337, "port")
@@ -211,8 +217,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	ticker, packets, commands, processed :=
-		time.Tick(5*time.Second), make(chan []byte, 8), make(chan string, 8), make(chan bool, 8)
+	ticker, packets, commands :=
+		time.Tick(5*time.Second), make(chan []byte, 8), make(chan Command, 8)
 	go func() {
 		connection, err := net.ListenPacket("udp", fmt.Sprintf(":%d", *Port+2))
 		if err != nil {
@@ -234,13 +240,17 @@ func main() {
 		}
 	}()
 	go func() {
+		processed := make(chan bool, 8)
 		for {
 			command := prompt.Input("> ", completer)
 			if command == "exit" {
 				done <- true
 				return
 			}
-			commands <- command
+			commands <- Command{
+				Command:   command,
+				Processed: processed,
+			}
 			<-processed
 		}
 	}()
@@ -277,7 +287,7 @@ func main() {
 			id++
 			messagesMutex.Unlock()
 		case command := <-commands:
-			parts := strings.Split(command, " ")
+			parts := strings.Split(command.Command, " ")
 			if parts[0] == "send" {
 				message := strings.Join(parts[1:], " ")
 				runes := make([]rune, 256)
@@ -337,7 +347,7 @@ func main() {
 					send(buffer)
 				}
 			}
-			processed <- true
+			command.Processed <- true
 		}
 	}
 }
