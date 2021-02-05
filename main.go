@@ -24,8 +24,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pointlander/upnp"
+
 	"github.com/c-bata/go-prompt"
-	"github.com/metricube/upnp"
 	"github.com/nictuku/dht"
 	"golang.org/x/crypto/scrypt"
 )
@@ -54,6 +55,7 @@ type Message struct {
 var (
 	// Port is the server port
 	Port          = flag.Int("port", 1337, "port")
+	external      string
 	u             *upnp.UPNP
 	nodes         = make(map[string]Peer)
 	nodesMutex    sync.Mutex
@@ -175,6 +177,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		external = fmt.Sprintf("%v:", ip)
 		blacklist[fmt.Sprintf("%v:%d", ip, *Port)] = true
 		blacklist[fmt.Sprintf("%v:%d", ip, *Port+2)] = true
 	}
@@ -189,7 +192,7 @@ func main() {
 	if err = d.Start(); err != nil {
 		panic(err)
 	}
-	go drainresults(d)
+	go drainresults(d, u)
 
 	c, done := make(chan os.Signal), make(chan bool)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -338,13 +341,30 @@ func main() {
 	}
 }
 
-func drainresults(n *dht.DHT) {
+func drainresults(n *dht.DHT, u *upnp.UPNP) {
 	for r := range n.PeersRequestResults {
+		local := make(map[string]string)
+		if external != "" {
+			mappings, err := u.GetPortMappings()
+			if err == nil {
+				for _, mapping := range mappings {
+					entry := mapping.Body.GetGenericPortMappingEntryResponse
+					local[fmt.Sprintf("%d", entry.NewExternalPort)] =
+						fmt.Sprintf("%s:%d", entry.NewInternalClient, entry.NewInternalPort)
+				}
+			}
+		}
 		for _, peers := range r {
 			for _, x := range peers {
 				peer := dht.DecodePeerAddress(x)
 				if blacklist[peer] {
 					continue
+				}
+				if external != "" && strings.HasPrefix(peer, external) {
+					port := strings.TrimPrefix(peer, external)
+					if localPeer, ok := local[port]; ok {
+						peer = localPeer
+					}
 				}
 				nodesMutex.Lock()
 				nodes[peer] = Peer{
