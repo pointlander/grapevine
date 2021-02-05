@@ -25,6 +25,8 @@ github.com/pointlander/upnp v0.0.0-20210205005203-0e6470c3cc41 h1:6F7EgbnNPRESY/
 github.com/pointlander/upnp v0.0.0-20210205005203-0e6470c3cc41/go.mod h1:OqeL9uB9GvvdRa42dBoH6WXLsweP+NFiZW41QEbBY6A=
 github.com/pointlander/upnp v0.0.0-20210205012127-bba1e94d4f8f h1:j6Pe3Y+468MXPv+gZvU8mY9gcxpedsdQBYut11GGWQM=
 github.com/pointlander/upnp v0.0.0-20210205012127-bba1e94d4f8f/go.mod h1:OqeL9uB9GvvdRa42dBoH6WXLsweP+NFiZW41QEbBY6A=
+github.com/pointlander/upnp v0.0.0-20210205041152-54610da80386 h1:xmu9Z8kJvoc3JjiIQf/u+qfb9pFiUvRvS6gmHavnCZ8=
+github.com/pointlander/upnp v0.0.0-20210205041152-54610da80386/go.mod h1:OqeL9uB9GvvdRa42dBoH6WXLsweP+NFiZW41QEbBY6A=
 github.com/youtube/vitess v2.1.1+incompatible h1:SE+P7DNX/jw5RHFs5CHRhZQjq402EJFCD33JhzQMdDw=
 github.com/youtube/vitess v2.1.1+incompatible/go.mod h1:hpMim5/30F1r+0P8GGtB29d0gWHr0IZ5unS+CG0zMx8=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
