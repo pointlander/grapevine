@@ -66,7 +66,7 @@ var (
 	nodes         = make(map[string]Peer)
 	nodesMutex    sync.Mutex
 	blacklist     = make(map[string]bool)
-	id            = 0
+	id            = 1
 	messages      = make([]Message, 0, 8)
 	messagesMutex sync.Mutex
 )
@@ -277,19 +277,32 @@ func main() {
 				runes[i] = rune(binary.LittleEndian.Uint32(text[i*4 : i*4+4]))
 			}
 			messagesMutex.Lock()
-			messages = append(messages, Message{
+			var found = 0
+			for i, message := range messages {
+				if message.ID == 0 {
+					found = i
+					break
+				}
+			}
+			message := Message{
 				ID:      id,
 				Buffer:  packet,
 				Message: string(runes),
 				Cost:    total,
 				Time:    time.Now(),
-			})
+			}
 			id++
+			if found != 0 {
+				messages[found] = message
+			} else {
+				messages = append(messages, message)
+			}
 			messagesMutex.Unlock()
 		case command := <-commands:
 			parts := strings.Split(command.Command, " ")
-			if parts[0] == "send" {
-				message := strings.Join(parts[1:], " ")
+			switch parts[0] {
+			case "send":
+				message := strings.TrimSpace(strings.TrimPrefix(command.Command, "send"))
 				runes := make([]rune, 256)
 				for i := range runes {
 					runes[i] = ' '
@@ -304,33 +317,42 @@ func main() {
 				nonce := pow(buffer, big.NewInt(DefaultCost))
 				buffer = append(buffer, nonce...)
 				send(buffer)
-			} else if parts[0] == "messages" {
+			case "messages":
 				messagesMutex.Lock()
 				sort.Slice(messages, func(i, j int) bool {
+					if messages[i].ID == 0 || messages[j].ID == 0 {
+						return true
+					}
 					if messages[i].Cost.Cmp(messages[j].Cost) == 0 {
 						return messages[i].Time.Before(messages[j].Time)
 					}
 					return messages[i].Cost.Cmp(messages[j].Cost) < 0
 				})
 				for _, message := range messages {
+					if message.ID == 0 {
+						continue
+					}
 					fmt.Printf("%d: \"%s\" %v\n", message.ID, strings.TrimSpace(message.Message), message.Cost)
 				}
 				messagesMutex.Unlock()
-			} else if parts[0] == "peers" {
+			case "peers":
 				nodesMutex.Lock()
 				for node := range nodes {
 					fmt.Println(node)
 				}
 				nodesMutex.Unlock()
-			} else if parts[0] == "like" {
-				if len(parts) == 3 {
+			case "like":
+				if len(parts) >= 2 {
 					id, err := strconv.Atoi(parts[1])
 					if err != nil {
 						log.Println(err)
 					}
-					cost, err := strconv.Atoi(parts[2])
-					if err != nil {
-						log.Println(err)
+					cost := -1
+					if len(parts) == 3 {
+						cost, err = strconv.Atoi(parts[2])
+						if err != nil {
+							log.Println(err)
+						}
 					}
 					var buffer []byte
 					messagesMutex.Lock()
@@ -340,12 +362,35 @@ func main() {
 						}
 					}
 					messagesMutex.Unlock()
-					min := big.NewInt(1)
-					min = min.Lsh(min, uint(cost))
-					nonce := pow(buffer, min)
-					buffer = append(buffer, nonce...)
+					if cost >= 0 {
+						min := big.NewInt(1)
+						min = min.Lsh(min, uint(cost))
+						nonce := pow(buffer, min)
+						buffer = append(buffer, nonce...)
+					}
 					send(buffer)
+				} else {
+					fmt.Printf("like required message id parameter: like 123\n")
+					fmt.Printf("adding a proof of work is also allowed: like 123 6\n")
 				}
+			case "drop":
+				if len(parts) == 2 {
+					id, err := strconv.Atoi(parts[1])
+					if err != nil {
+						log.Println(err)
+					}
+					messagesMutex.Lock()
+					for i, message := range messages {
+						if message.ID == id {
+							messages[i] = Message{}
+						}
+					}
+					messagesMutex.Unlock()
+				} else {
+					fmt.Printf("drop requires a message id: drop 123\n")
+				}
+			default:
+				fmt.Printf("unknown command %s\n", parts[0])
 			}
 			command.Processed <- true
 		}
