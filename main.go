@@ -150,6 +150,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 		{Text: "messages", Description: "list messages in the database"},
 		{Text: "peers", Description: "list peer nodes"},
 		{Text: "like", Description: "like a message in the database: like 123 5"},
+		{Text: "drop", Description: "drop a message in the database: drop 123"},
 		{Text: "exit", Description: "Exit the application"},
 	}
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
